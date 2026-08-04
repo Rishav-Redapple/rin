@@ -1,0 +1,37 @@
+(* ========================================== *)
+(* 1. Grammar Root & Structural Boundaries    *)
+(* ========================================== *)
+Root         ::= RootObject | RootArray
+
+RootObject   ::= "." "{" GroupList? "}"
+RootArray    ::= "." "[" GroupList? "]"
+
+GroupList    ::= Group ( "," Group )*
+Group        ::= TypeExpr "(" KeyList ")"
+
+(* ========================================== *)
+(* 2. Type Expression Composition             *)
+(* ========================================== *)
+TypeExpr     ::= UnionExpr
+
+(* Union (|) evaluates Left-to-Right with lowest precedence *)
+UnionExpr    ::= ArrayExpr ( "|" ArrayExpr )*
+
+(* Array (A.) binds Right-to-Left recursively *)
+ArrayExpr    ::= ( "A." )* BaseType OptMarker?
+
+BaseType     ::= "S" | "N" | "B" | "L" | "X" | "O"
+OptMarker    ::= "?"
+
+(* ========================================== *)
+(* 3. Key Selector & Nested Record Scoping    *)
+(* ========================================== *)
+KeyList      ::= KeyItem+
+KeyItem      ::= "." Identifier OptMarker? RecordBody?
+
+RecordBody   ::= "{" GroupList? "}"
+
+(* ========================================== *)
+(* 4. Lexical Terminals                       *)
+(* ========================================== *)
+Identifier   ::= [a-zA-Z_][a-zA-Z0-9_]*

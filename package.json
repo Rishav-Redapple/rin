@@ -1,0 +1,18 @@
+{
+  "name": "rin",
+  "module": "rin.ts",
+  "type": "module",
+  "bin": {
+    "rin": "./cli.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
