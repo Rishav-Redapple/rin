@@ -1,4 +1,4 @@
-/** RIN (Reduced Interface Notation) parser and runtime validator. */
+/** RIN (Reduced Interface Notation) v2 parser and runtime validator. */
 
 export type BaseType = "S" | "N" | "B" | "L" | "X" | "O";
 
@@ -15,12 +15,14 @@ export interface UnionType {
 }
 
 export type TypeExpression = AtomicType | UnionType;
+export type TypeExpr = TypeExpression;
 
 export interface KeySelector {
   name: string;
   optional: boolean;
   record?: Group[];
 }
+export type Key = KeySelector;
 
 export interface Group {
   type: TypeExpression;
@@ -60,41 +62,65 @@ class Parser {
   constructor(private readonly source: string) {}
 
   parse(): RootSchema {
+    this.skipWhitespaceAndNewlines();
     this.expect(".");
     const container = this.consume("{") ? "object" : this.consume("[") ? "array" : undefined;
     if (!container) this.fail("Expected '{' or '[' after root marker");
 
     const end = container === "object" ? "}" : "]";
-    let groups: Group[];
-    if (this.consume(end)) {
-      groups = [];
-    } else {
-      groups = this.parseGroupList(end);
-      this.expect(end);
-    }
-    this.skipWhitespace();
+    const groups = this.parseGroupList(end);
+    this.expect(end);
+    this.skipWhitespaceAndNewlines();
     if (this.position !== this.source.length) this.fail("Unexpected trailing input");
     return { kind: "root", container, groups };
   }
 
   private parseGroupList(end: string): Group[] {
-    const groups = [this.parseGroup()];
-    while (this.consume(",")) groups.push(this.parseGroup());
-    this.skipWhitespace();
-    if (this.peek() !== end) this.fail(`Expected ',' or '${end}'`);
+    const groups: Group[] = [];
+    this.skipWhitespaceAndNewlines();
+    while (this.position < this.source.length && this.peek() !== end) {
+      groups.push(this.parseGroup());
+      this.skipHorizontalWhitespace();
+      if (this.consume(",")) {
+        this.skipWhitespaceAndNewlines();
+      } else {
+        this.skipWhitespaceAndNewlines();
+      }
+      if (this.peek() === end) break;
+    }
     return groups;
   }
 
   private parseGroup(): Group {
     const type = this.parseTypeExpression();
-    this.expect("(");
+    this.skipHorizontalWhitespace();
+    if (this.consume("(")) {
+      const keys = this.parseBlockKeys();
+      this.expect(")");
+      return { type, keys };
+    }
+
     const keys: KeySelector[] = [];
-    do {
+    while (this.isIdentifierStart()) {
       keys.push(this.parseKey());
-      this.skipWhitespace();
-    } while (this.peek() === ".");
-    this.expect(")");
+      this.skipHorizontalWhitespace();
+    }
+    if (keys.length === 0) {
+      this.fail("Expected key identifier or '(' for group");
+    }
     return { type, keys };
+  }
+
+  private parseBlockKeys(): KeySelector[] {
+    const keys: KeySelector[] = [];
+    this.skipWhitespaceAndNewlines();
+    while (this.position < this.source.length && this.peek() !== ")") {
+      keys.push(this.parseKey());
+      this.skipHorizontalWhitespace();
+      this.consume(",");
+      this.skipWhitespaceAndNewlines();
+    }
+    return keys;
   }
 
   private parseTypeExpression(): TypeExpression {
@@ -106,7 +132,7 @@ class Parser {
   private parseAtomicType(): AtomicType {
     let arrayDepth = 0;
     while (this.consume("A.")) arrayDepth += 1;
-    this.skipWhitespace();
+    this.skipHorizontalWhitespace();
     const candidate = this.source[this.position];
     if (!candidate || !["S", "N", "B", "L", "X", "O"].includes(candidate)) {
       this.fail("Expected base type (S, N, B, L, X, or O)");
@@ -121,27 +147,34 @@ class Parser {
   }
 
   private parseKey(): KeySelector {
-    this.expect(".");
     const name = this.parseIdentifier();
     const optional = this.consume("?");
     let record: Group[] | undefined;
+    this.skipHorizontalWhitespace();
     if (this.consume("{")) {
-      record = this.consume("}") ? [] : this.parseGroupList("}");
+      record = this.parseGroupList("}");
       this.expect("}");
     }
     return { name, optional, ...(record === undefined ? {} : { record }) };
   }
 
+  private isIdentifierStart(): boolean {
+    this.skipHorizontalWhitespace();
+    const ch = this.source[this.position];
+    if (!ch) return false;
+    return ch === "$" || /[a-zA-Z_]/.test(ch);
+  }
+
   private parseIdentifier(): string {
-    this.skipWhitespace();
-    const match = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(this.source.slice(this.position));
+    this.skipHorizontalWhitespace();
+    const match = /^\$?([a-zA-Z_][a-zA-Z0-9_]*)/.exec(this.source.slice(this.position));
     if (!match) this.fail("Expected identifier");
     this.position += match[0].length;
-    return match[0];
+    return match[1]!;
   }
 
   private consume(token: string): boolean {
-    this.skipWhitespace();
+    this.skipHorizontalWhitespace();
     if (!this.source.startsWith(token, this.position)) return false;
     this.position += token.length;
     return true;
@@ -152,11 +185,14 @@ class Parser {
   }
 
   private peek(): string | undefined {
-    this.skipWhitespace();
     return this.source[this.position];
   }
 
-  private skipWhitespace(): void {
+  private skipHorizontalWhitespace(): void {
+    while (/[ \t]/.test(this.source[this.position] ?? "")) this.position += 1;
+  }
+
+  private skipWhitespaceAndNewlines(): void {
     while (/\s/.test(this.source[this.position] ?? "")) this.position += 1;
   }
 
@@ -303,3 +339,4 @@ function addIssue(
   const received = receivedLabel(value);
   errors.push({ path, expected, received, message: `${path} ${suffix}; expected ${expected}, received ${received}` });
 }
+
