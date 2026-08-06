@@ -1,37 +1,36 @@
-(* ========================================== *)
-(* 1. Grammar Root & Structural Boundaries    *)
-(* ========================================== *)
-Root         ::= RootObject | RootArray
+(* ── Root ───────────────────────────────────── *)
+Root         ::= ".{" GroupList "}"         (* object root *)
+               | ".[" GroupList "]"         (* array  root *)
 
-RootObject   ::= "." "{" GroupList? "}"
-RootArray    ::= "." "[" GroupList? "]"
+(* ── Groups ─────────────────────────────────── *)
+(*  GroupSep allows both comma (inline) and      *)
+(*  newlines (block) as equivalent separators.   *)
+GroupList    ::= Group (GroupSep Group)*
+GroupSep     ::= "," | NL+
 
-GroupList    ::= Group ( "," Group )*
-Group        ::= TypeExpr "(" KeyList ")"
+Group        ::= LeafGroup | BlockGroup
 
-(* ========================================== *)
-(* 2. Type Expression Composition             *)
-(* ========================================== *)
-TypeExpr     ::= UnionExpr
+(*  Inline: type tag followed by space-separated keys.  *)
+(*  Terminated by GroupSep or closing delimiter.        *)
+LeafGroup    ::= TypeExpr Identifier+
 
-(* Union (|) evaluates Left-to-Right with lowest precedence *)
-UnionExpr    ::= ArrayExpr ( "|" ArrayExpr )*
+(*  Block: type tag opens a paren scope.                *)
+(*  Each line inside is one key with an optional shape. *)
+BlockGroup   ::= TypeExpr "(" NL+ KeyLine+ ")"
 
-(* Array (A.) binds Right-to-Left recursively *)
-ArrayExpr    ::= ( "A." )* BaseType OptMarker?
+(* ── Keys ───────────────────────────────────── *)
+KeyLine      ::= Identifier "?"? RecordBody? NL+
 
+(*  Inline record: everything fits on one line.  *)
+(*  Block record:  nested shape spans lines.     *)
+RecordBody   ::= "{" GroupList "}"
+               | "{" NL+ GroupList NL+ "}"
+
+(* ── Type Expression ─────────────────────────── *)
+TypeExpr     ::= AtomicType ("|" AtomicType)*
+AtomicType   ::= "A."* BaseType "?"?
 BaseType     ::= "S" | "N" | "B" | "L" | "X" | "O"
-OptMarker    ::= "?"
 
-(* ========================================== *)
-(* 3. Key Selector & Nested Record Scoping    *)
-(* ========================================== *)
-KeyList      ::= KeyItem+
-KeyItem      ::= "." Identifier OptMarker? RecordBody?
-
-RecordBody   ::= "{" GroupList? "}"
-
-(* ========================================== *)
-(* 4. Lexical Terminals                       *)
-(* ========================================== *)
+(* ── Lexical ─────────────────────────────────── *)
 Identifier   ::= [a-zA-Z_][a-zA-Z0-9_]*
+NL           ::= "\n" | "\r\n"

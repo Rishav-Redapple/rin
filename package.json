@@ -6,6 +6,7 @@
     "rin": "./cli.ts"
   },
   "scripts": {
+    "build": "bun build --compile --minify --outfile=rin cli.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
