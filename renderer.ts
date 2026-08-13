@@ -1,166 +1,148 @@
 import type { AtomicType, BaseType, Group, KeySelector, RootSchema, TypeExpression } from "./rin.ts";
 import { coalesceGroups } from "./converter.ts";
 
-export type Target = "json" | "rin" | "type";
+export type Target = "json" | "rin" | "type" | "go";
 
-export function render(schema: RootSchema, target: Target, name = "Root", pretty = false): string {
-  switch (target) {
-    case "json":
-      return renderJson(schema, pretty);
-    case "rin":
-      return renderRin(schema, pretty);
-    case "type":
-      return renderTypeScript(schema, name, pretty);
-  }
+const names: Record<BaseType, string> = {
+  S: "String", N: "Number", B: "Boolean", L: "Null", X: "Any", O: "Object",
+};
+
+export function render(schema: RootSchema, target: Target, name: string | undefined = undefined, pretty = false): string {
+  if (target === "json") return `${JSON.stringify(exampleValue(schema), null, pretty ? 2 : undefined)}\n`;
+  if (target === "rin") return renderRin(schema, pretty, name);
+  if (target === "type") return renderTypeScript(schema, name ?? "Root", pretty);
+  return renderGo(schema, name ?? "Root", pretty);
 }
 
-export function renderJson(schema: RootSchema, pretty: boolean): string {
-  return pretty ? `${JSON.stringify(schema, null, 2)}\n` : `${JSON.stringify(schema)}\n`;
-}
-
-export function renderRin(schema: RootSchema, pretty: boolean): string {
-  const open = schema.container === "object" ? ".{" : ".[";
-  const close = schema.container === "object" ? "}" : "]";
+export function renderRin(schema: RootSchema, pretty: boolean, name?: string): string {
   const groups = coalesceGroups(schema.groups);
+  const body = renderRecord(groups, pretty, 0);
+  return `${name ? `${name} ` : ""}${schema.container === "array" ? `[${body}]` : body}\n`;
+}
 
-  if (groups.length === 0) return `${open}${close}\n`;
+function renderRecord(groups: Group[], pretty: boolean, level: number): string {
+  if (groups.length === 0) return "{}";
+  const rendered = groups.flatMap((group) => renderGroup(group, pretty, level));
+  if (!pretty) return `{${rendered.join(";")}}`;
+  const indent = "  ".repeat(level);
+  const inner = "  ".repeat(level + 1);
+  return `{\n${rendered.map((line) => `${inner}${line}`).join("\n")}\n${indent}}`;
+}
 
-  if (!pretty) {
-    return `${open}${groups.map(renderGroupMinimal).join(",")}${close}\n`;
+function renderGroup(group: Group, pretty: boolean, level: number): string[] {
+  const keys = group.keys;
+  if (isObjectGroup(group)) {
+    return keys.map((key) => `${key.name}${"[]".repeat(arrayDepth(group.type))}${key.optional ? "?" : ""}${renderRecord(coalesceGroups(key.record ?? []), pretty, level + 1)}`);
   }
-
-  const lines = groups.map((g) => renderGroupPretty(g, 1));
-  return `${open}\n${lines.join(",\n")}\n${close}\n`;
+  return [`${renderType(group.type)} ${keys.map((key) => `${key.name}${key.optional || isNullable(group.type) ? "?" : ""}`).join(" ")}`];
 }
 
-function renderGroupMinimal(group: Group): string {
-  return `${renderType(group.type)} ${group.keys.map(renderKeyMinimal).join(" ")}`;
-}
-
-function renderKeyMinimal(key: KeySelector): string {
-  const name = escapeIdentifier(key.name);
-  const optional = key.optional ? "?" : "";
-  const record = key.record
-    ? `{${coalesceGroups(key.record).map(renderGroupMinimal).join(",")}}`
-    : "";
-  return `${name}${optional}${record}`;
-}
-
-function renderGroupPretty(group: Group, level: number): string {
-  const indent = "  ".repeat(level);
-  const hasRecords = group.keys.some((k) => k.record && k.record.length > 0);
-
-  if (group.type.kind === "atomic" && group.type.base === "O" && hasRecords && group.keys.length > 1) {
-    const keyLines = group.keys.map((k) => renderKeyPrettyBlock(k, level + 1));
-    return `${indent}${renderType(group.type)}(\n${keyLines.join("\n")}\n${indent})`;
-  }
-
-  const keysStr = group.keys.map((k) => renderKeyPrettyInline(k, level)).join(" ");
-  return `${indent}${renderType(group.type)} ${keysStr}`;
-}
-
-function renderKeyPrettyInline(key: KeySelector, level: number): string {
-  const name = escapeIdentifier(key.name);
-  const optional = key.optional ? "?" : "";
-  if (!key.record) return `${name}${optional}`;
-
-  const indent = "  ".repeat(level);
-  const innerGroups = coalesceGroups(key.record);
-  if (innerGroups.length === 0) return `${name}${optional}{}`;
-
-  const recordLines = innerGroups.map((g) => renderGroupPretty(g, level + 1));
-  return `${name}${optional}{\n${recordLines.join(",\n")}\n${indent}}`;
-}
-
-function renderKeyPrettyBlock(key: KeySelector, level: number): string {
-  const indent = "  ".repeat(level);
-  const name = escapeIdentifier(key.name);
-  const optional = key.optional ? "?" : "";
-  if (!key.record) return `${indent}${name}${optional}`;
-
-  const innerGroups = coalesceGroups(key.record);
-  const recordLines = innerGroups.map((g) => renderGroupPretty(g, level + 1));
-  return `${indent}${name}${optional}{\n${recordLines.join(",\n")}\n${indent}}`;
-}
-
-function escapeIdentifier(name: string): string {
-  if (["S", "N", "B", "L", "X", "O"].includes(name)) return `$${name}`;
-  return name;
+function isObjectGroup(group: Group): boolean {
+  return group.type.kind === "atomic" && group.type.base === "O";
 }
 
 function renderType(type: TypeExpression): string {
-  if (type.kind === "union") return type.members.map(renderType).join("|");
-  return `${"A.".repeat(type.arrayDepth)}${type.base}${type.nullable ? "?" : ""}`;
+  if (type.kind === "union") return type.members.map(renderAtomic).join("|");
+  return renderAtomic(type);
 }
+
+function renderAtomic(type: AtomicType): string { return `${names[type.base]}${"[]".repeat(type.arrayDepth)}`; }
+function arrayDepth(type: TypeExpression): number { return type.kind === "atomic" ? type.arrayDepth : 0; }
+function isNullable(type: TypeExpression): boolean { return type.kind === "atomic" && type.nullable; }
 
 export function renderTypeScript(schema: RootSchema, name: string, pretty: boolean): string {
-  if (!pretty) {
-    if (schema.container === "object") return `type ${name}=${renderTsRecordMinimal(schema.groups)};\n`;
-    const itemName = `${name}Item`;
-    return `type ${itemName}=${renderTsRecordMinimal(schema.groups)};type ${name}=${itemName}[];\n`;
-  }
-
-  if (schema.container === "object") return `type ${name} = ${renderTsRecordPretty(schema.groups, 0)};\n`;
-  const itemName = `${name}Item`;
-  return `type ${itemName} = ${renderTsRecordPretty(schema.groups, 0)};\n\ntype ${name} = ${itemName}[];\n`;
+  if (schema.container === "object") return pretty ? `type ${name} = ${renderTsRecord(schema.groups, 0, true)};\n` : `type ${name}=${renderTsRecord(schema.groups, 0, false)};\n`;
+  const item = `${name}Item`;
+  if (!pretty) return `type ${item}=${renderTsRecord(schema.groups, 0, false)};type ${name}=${item}[];\n`;
+  return `type ${item} = ${renderTsRecord(schema.groups, 0, true)};\n\ntype ${name} = ${item}[];\n`;
 }
 
-function renderTsRecordMinimal(groups: Group[]): string {
+function renderTsRecord(groups: Group[], level: number, pretty: boolean): string {
   if (groups.length === 0) return "{}";
-  const fields = groups.flatMap((g) =>
-    g.keys.map((k) => `${k.name}${k.optional ? "?" : ""}:${renderTsTypeMinimal(g.type, k.record)};`)
-  );
-  return `{${fields.join("")}}`;
-}
-
-function renderTsTypeMinimal(type: TypeExpression, record: Group[] | undefined): string {
-  if (type.kind === "union") return type.members.map((m) => renderTsAtomicMinimal(m, record)).join("|");
-  return renderTsAtomicMinimal(type, record);
-}
-
-function renderTsAtomicMinimal(type: AtomicType, record: Group[] | undefined): string {
-  const baseMap: Record<BaseType, string> = {
-    S: "string",
-    N: "number",
-    B: "boolean",
-    L: "null",
-    X: "unknown",
-    O: record ? renderTsRecordMinimal(record) : "object",
-  };
-  let rendered = baseMap[type.base];
-  for (let depth = 0; depth < type.arrayDepth; depth += 1) {
-    rendered = `${rendered.includes("|") ? `(${rendered})` : rendered}[]`;
-  }
-  return type.nullable ? `${rendered}|null` : rendered;
-}
-
-function renderTsRecordPretty(groups: Group[], level: number): string {
-  if (groups.length === 0) return "{}";
+  const fields = groups.flatMap((group) => group.keys.map((key) => {
+    const type = renderTsType(group.type, key.record, level + 1, pretty);
+    const nullable = key.optional && !type.includes("null") ? `${type}${pretty ? " | " : "|"}null` : type;
+    return `${key.name}${key.optional ? "?" : ""}:${nullable};`;
+  }));
+  if (!pretty) return `{${fields.join("")}}`;
   const indent = "  ".repeat(level);
   const inner = "  ".repeat(level + 1);
-  const fields = groups.flatMap((g) =>
-    g.keys.map((k) => `${inner}${k.name}${k.optional ? "?" : ""}: ${renderTsTypePretty(g.type, k.record, level + 1)};`)
-  );
-  return `{\n${fields.join("\n")}\n${indent}}`;
+  return `{\n${fields.map((field) => `${inner}${field.replace(":", ": ")}`).join("\n")}\n${indent}}`;
 }
 
-function renderTsTypePretty(type: TypeExpression, record: Group[] | undefined, level: number): string {
-  if (type.kind === "union") return type.members.map((m) => renderTsAtomicPretty(m, record, level)).join(" | ");
-  return renderTsAtomicPretty(type, record, level);
+function renderTsType(type: TypeExpression, record: Group[] | undefined, level: number, pretty: boolean): string {
+  if (type.kind === "union") return type.members.map((member) => renderTsAtomic(member, record, level, pretty)).join(" | ");
+  return renderTsAtomic(type, record, level, pretty);
 }
 
-function renderTsAtomicPretty(type: AtomicType, record: Group[] | undefined, level: number): string {
-  const baseMap: Record<BaseType, string> = {
-    S: "string",
-    N: "number",
-    B: "boolean",
-    L: "null",
-    X: "unknown",
-    O: record ? renderTsRecordPretty(record, level) : "object",
-  };
-  let rendered = baseMap[type.base];
-  for (let depth = 0; depth < type.arrayDepth; depth += 1) {
-    rendered = `${rendered.includes(" | ") ? `(${rendered})` : rendered}[]`;
+function renderTsAtomic(type: AtomicType, record: Group[] | undefined, level: number, pretty: boolean): string {
+  let value = type.base === "O" ? (record ? renderTsRecord(record, level, pretty) : "object") : ({ S: "string", N: "number", B: "boolean", L: "null", X: "any" } as const)[type.base];
+  for (let depth = 0; depth < type.arrayDepth; depth += 1) value = `${value.includes("|") ? `(${value})` : value}[]`;
+  return type.nullable ? `${value}${pretty ? " | " : "|"}null` : value;
+}
+
+function exampleValue(schema: RootSchema): unknown {
+  const object = exampleRecord(schema.groups);
+  return schema.container === "array" ? [object] : object;
+}
+
+function exampleRecord(groups: Group[]): Record<string, unknown> {
+  const value: Record<string, unknown> = {};
+  for (const group of groups) for (const key of group.keys) value[key.name] = exampleType(group.type, key.record);
+  return value;
+}
+
+function exampleType(type: TypeExpression, record?: Group[]): unknown {
+  const atomic = type.kind === "union" ? type.members[0]! : type;
+  let value: unknown;
+  switch (atomic.base) {
+    case "S": value = ""; break;
+    case "N": value = 0; break;
+    case "B": value = false; break;
+    case "L": value = null; break;
+    case "X": value = null; break;
+    case "O": value = record ? exampleRecord(record) : {}; break;
   }
-  return type.nullable ? `${rendered} | null` : rendered;
+  for (let index = 0; index < atomic.arrayDepth; index += 1) value = [value];
+  return value;
+}
+
+export function renderGo(schema: RootSchema, name: string, pretty: boolean): string {
+  const prefix = "package main\n\n";
+  if (schema.container === "object") return `${prefix}type ${name} ${renderGoRecord(schema.groups, 0, pretty)}\n`;
+  const item = `${name}Item`;
+  if (!pretty) return `${prefix}type ${item} ${renderGoRecord(schema.groups, 0, false)};type ${name} []${item}\n`;
+  return `${prefix}type ${item} ${renderGoRecord(schema.groups, 0, true)}\n\ntype ${name} []${item}\n`;
+}
+
+function renderGoRecord(groups: Group[], level: number, pretty: boolean): string {
+  const fields = groups.flatMap((group) => group.keys.map((key) => renderGoField(key, group.type, level + 1, pretty)));
+  if (!pretty) return `struct{${fields.join(";")}}`;
+  if (fields.length === 0) return "struct{}";
+  const indent = "  ".repeat(level);
+  const inner = "  ".repeat(level + 1);
+  return `struct {\n${fields.map((field) => `${inner}${field}`).join("\n")}\n${indent}}`;
+}
+
+function renderGoField(key: KeySelector, type: TypeExpression, level: number, pretty: boolean): string {
+  const value = renderGoType(type, key.record, level, pretty);
+  const optional = key.optional && !value.startsWith("*") ? `*${value}` : value;
+  const tag = key.optional ? `json:"${key.name},omitempty"` : `json:"${key.name}"`;
+  return `${goFieldName(key.name)} ${optional} \`${tag}\``;
+}
+
+function renderGoType(type: TypeExpression, record: Group[] | undefined, level: number, pretty: boolean): string {
+  if (type.kind === "union") return "any";
+  if (type.base === "L" || type.base === "X") return "any";
+  let value: string;
+  if (type.base === "O") value = record ? renderGoRecord(record, level, pretty) : "map[string]any";
+  else value = ({ S: "string", N: "float64", B: "bool" } as const)[type.base];
+  for (let depth = 0; depth < type.arrayDepth; depth += 1) value = `[]${value}`;
+  return type.nullable ? `*${value}` : value;
+}
+
+function goFieldName(name: string): string {
+  const parts = name.match(/[A-Za-z0-9]+/g) ?? [];
+  const rendered = parts.map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`).join("") || "Field";
+  return /^[A-Za-z]/.test(rendered) ? rendered : `Field${rendered}`;
 }

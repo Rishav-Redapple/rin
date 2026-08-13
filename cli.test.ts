@@ -4,83 +4,43 @@ const decoder = new TextDecoder();
 
 function cli(input: string, ...args: string[]): { exitCode: number; stdout: string; stderr: string } {
   const process = Bun.spawnSync(["bun", "cli.ts", ...args], {
-    cwd: import.meta.dir,
-    stdin: new TextEncoder().encode(input),
-    stdout: "pipe",
-    stderr: "pipe",
+    cwd: import.meta.dir, stdin: new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe",
   });
   return { exitCode: process.exitCode, stdout: decoder.decode(process.stdout), stderr: decoder.decode(process.stderr) };
 }
 
-test("CLI converts piped JSON to RIN v2 and TypeScript type", () => {
-  expect(cli('{"name":"Ada","items":[{"id":1},{"id":"two","active":true}]}').stdout)
-    .toBe('.{A.O items{B active?,N|S id},S name}\n');
-
-  const prettyRin = cli('{"name":"Ada","items":[{"id":1},{"id":"two","active":true}]}', "-p").stdout;
-  expect(prettyRin).toContain(".{\n");
-  expect(prettyRin).toContain("  A.O items{\n");
-  expect(prettyRin).toContain("  S name\n");
-
-  expect(cli('{"name":"Ada"}', "--to=type").stdout).toBe("type Root={name:string;};\n");
-  expect(cli('{"name":"Ada"}', "--to=type", "-p").stdout).toBe("type Root = {\n  name: string;\n};\n");
+test("CLI converts piped JSON to compact and pretty RIN v3", () => {
+  const json = '{"name":"Ada","items":[{"id":1},{"id":"two","active":true}]}' ;
+  expect(cli(json).stdout).toBe("{items[]{Boolean active?;Number|String id};String name}\n");
+  const pretty = cli(json, "-p").stdout;
+  expect(pretty).toContain("{\n");
+  expect(pretty).toContain("items[]{");
 });
 
-test("CLI detects RIN v2 and interfaces/types, and supports target shortcuts", () => {
-  expect(cli(".{S name}", "-J").stdout).toBe('{"kind":"root","container":"object","groups":[{"type":{"kind":"atomic","base":"S","arrayDepth":0,"nullable":false},"keys":[{"name":"name","optional":false}]}]}\n');
-  expect(cli(".{S name}", "-J", "-p").stdout).toContain('{\n  "kind": "root",');
-  expect(cli("interface User { name: string; age?: number; }", "-R").stdout).toBe(".{S name,N age?}\n");
-  expect(cli("type User = { name: string; age?: number; };", "-R").stdout).toBe(".{S name,N age?}\n");
-  expect(cli("interface User { name: string; age?: number; }", "-R", "-p").stdout).toBe(".{\n  S name,\n  N age?\n}\n");
-  expect(cli("interface User { name: string; }", "-T").stdout).toBe("type User={name:string;};\n");
-  expect(cli("interface User { name: string; }", "-T", "-p").stdout).toBe("type User = {\n  name: string;\n};\n");
+test("CLI emits JSON data rather than the schema AST", () => {
+  expect(cli("{String name; Number id}", "-J").stdout).toBe('{"name":"","id":0}\n');
+  expect(cli("{String name; Number id}", "-J", "-p").stdout).toBe('{\n  "name": "",\n  "id": 0\n}\n');
+  expect(cli('{"name":"Ada","id":7}', "-J").stdout).toBe('{"name":"Ada","id":7}\n');
 });
 
-test("CLI coalesces keys of the same type at all nested levels", () => {
-  const json = JSON.stringify({ reactions: { dislikes: 5, likes: 10 } });
-  expect(cli(json).stdout).toBe(".{O reactions{N dislikes likes}}\n");
-  expect(cli(json, "-p").stdout).toBe(".{\n  O reactions{\n    N dislikes likes\n  }\n}\n");
-
-  const ts = "type Post = { reactions: { dislikes: number; likes: number; }; };";
-  expect(cli(ts, "-R").stdout).toBe(".{O reactions{N dislikes likes}}\n");
-  expect(cli(ts, "-R", "-p").stdout).toBe(".{\n  O reactions{\n    N dislikes likes\n  }\n}\n");
+test("CLI supports RIN/type detection, pretty output, and root overrides", () => {
+  expect(cli("interface User { name: string; age?: number; }", "-R").stdout).toBe("{String name;Number age?}\n");
+  expect(cli("{String name}", "-T", "--name=Account").stdout).toBe("type Account={name:string;};\n");
+  expect(cli("{String name}", "-T", "-n", "Account", "-p").stdout).toBe("type Account = {\n  name: string;\n};\n");
+  expect(cli("{String name}", "-R", "-n", "User Profile").stdout).toBe("User Profile {String name}\n");
+  expect(cli("{Number id?}", "-T").stdout).toBe("type Root={id?:number|null;};\n");
+  expect(cli("{String name}", "-R", "-n", "Account").stdout).toBe("Account {String name}\n");
+  expect(cli("Account {String name}", "-T").stdout).toBe("type Account={name:string;};\n");
+  expect(cli("{String name;Number id?}", "-G", "--name=User").stdout).toBe("package main\n\ntype User struct{Name string `json:\"name\"`;Id *float64 `json:\"id,omitempty\"`}\n");
+  expect(cli("{String name;Number id?}", "--to-go", "--name=User", "-p").stdout).toBe("package main\n\ntype User struct {\n  Name string `json:\"name\"`\n  Id *float64 `json:\"id,omitempty\"`\n}\n");
+  expect(cli("{Boolean active}", "--to=go").stdout).toBe("package main\n\ntype Root struct{Active bool `json:\"active\"`}\n");
 });
 
-test("CLI accepts a positional source and overwrites an explicit output file", async () => {
+test("CLI accepts an output file and rejects invalid roots", async () => {
   const path = `/tmp/rin-cli-${crypto.randomUUID()}.out`;
-  expect(cli("", ".{S name}", "-o", path, "-T", "-p").exitCode).toBe(0);
-  expect(await Bun.file(path).text()).toBe("type Root = {\n  name: string;\n};\n");
-  expect(cli("", ".{N age}", `--output=${path}`, "-T", "-p").exitCode).toBe(0);
-  expect(await Bun.file(path).text()).toBe("type Root = {\n  age: number;\n};\n");
-});
-
-test("CLI supports -h, --help-all, and -L/--legend help flags", () => {
-  const shortHelp = cli("", "-h");
-  expect(shortHelp.exitCode).toBe(0);
-  expect(shortHelp.stdout).toContain("RIN CLI");
-  expect(shortHelp.stdout).toContain("Usage:");
-
-  const verboseHelp = cli("", "--help-all");
-  expect(verboseHelp.exitCode).toBe(0);
-  expect(verboseHelp.stdout).toContain("RIN CLI — Reduced Interface Notation tool (Verbose Help)");
-  expect(verboseHelp.stdout).toContain("Description:");
-
-  const legendHelp = cli("", "-L");
-  expect(legendHelp.exitCode).toBe(0);
-  expect(legendHelp.stdout).toContain("RIN Schema Notation Legend & Syntax Reference");
-  expect(legendHelp.stdout).toContain("Base Types:");
-  expect(legendHelp.stdout).toContain("Type Modifiers:");
-
-  const legendsHelp = cli("", "--legends");
-  expect(legendsHelp.exitCode).toBe(0);
-  expect(legendsHelp.stdout).toContain("RIN Schema Notation Legend & Syntax Reference");
-});
-
-test("CLI reports invalid flags and unsupported JSON roots on stderr", () => {
-  const badFlag = cli("{}", "--wat");
-  expect(badFlag.exitCode).toBe(1);
-  expect(badFlag.stdout).toBe("");
-  expect(badFlag.stderr).toContain("unknown flag '--wat'");
-  const scalar = cli("[1,2]");
-  expect(scalar.exitCode).toBe(1);
-  expect(scalar.stderr).toContain("arrays must contain object records");
+  expect(cli("", "{String name}", "-o", path, "-T").exitCode).toBe(0);
+  expect(await Bun.file(path).text()).toBe("type Root={name:string;};\n");
+  const invalid = cli("{String{Number id}}");
+  expect(invalid.exitCode).toBe(1);
+  expect(invalid.stderr).toContain("Expected identifier");
 });

@@ -8,6 +8,7 @@ interface Options {
   positional?: string;
   target: Target;
   pretty: boolean;
+  name?: string;
   help?: "short" | "verbose" | "legend";
 }
 
@@ -32,8 +33,10 @@ export async function run(argv: string[], stdin: string): Promise<{ stdout: stri
     }
     const source = options.positional ?? stdin;
     if (source.trim() === "") throw new CliError("no input provided");
-    const { schema, name } = detectAndConvert(source);
-    const output = render(schema, options.target, name, options.pretty);
+    const { schema, name, kind, value } = detectAndConvert(source);
+    const output = options.target === "json" && kind === "json"
+      ? `${JSON.stringify(value, null, options.pretty ? 2 : undefined)}\n`
+      : render(schema, options.target, options.name ?? (kind === "rin" ? name : undefined), options.pretty);
     return { stdout: options.output ? "" : output, stderr: "", exitCode: 0, output: options.output ? output : undefined };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -47,17 +50,18 @@ function parseArguments(argv: string[]): Options {
   let positional: string | undefined;
   let targetSet = false;
   let pretty = false;
+  let name: string | undefined;
   let help: "short" | "verbose" | "legend" | undefined;
 
   const setTarget = (value: string): void => {
-    if (value !== "json" && value !== "rin" && value !== "type") throw new CliError(`invalid output format '${value}' (expected json, rin, or type)`);
+    if (value !== "json" && value !== "rin" && value !== "type" && value !== "go") throw new CliError(`invalid output format '${value}' (expected json, rin, type, or go)`);
     if (targetSet && target !== value) throw new CliError("conflicting output format flags");
     target = value as Target;
     targetSet = true;
   };
   const takeValue = (flag: string, index: number): [string, number] => {
     const value = argv[index + 1];
-    if (!value || value.startsWith("-")) throw new CliError(`missing value for ${flag}`);
+    if (value === undefined || value.startsWith("-")) throw new CliError(`missing value for ${flag}`);
     return [value, index + 1];
   };
 
@@ -77,6 +81,14 @@ function parseArguments(argv: string[]): Options {
       help = "legend";
     } else if (arg === "-p" || arg === "--pretty") {
       pretty = true;
+    } else if (arg === "-n" || arg === "--name") {
+      const [value, next] = takeValue(arg, index);
+      if (name !== undefined) throw new CliError("name was specified more than once");
+      name = value;
+      index = next;
+    } else if (arg.startsWith("--name=")) {
+      if (name !== undefined) throw new CliError("name was specified more than once");
+      name = arg.slice(7);
     } else if (arg === "-o" || arg === "--output") {
       const [value, next] = takeValue(arg, index);
       if (output !== undefined) throw new CliError("output was specified more than once");
@@ -97,6 +109,8 @@ function parseArguments(argv: string[]): Options {
       setTarget("rin");
     } else if (arg === "-T" || arg === "--to-type") {
       setTarget("type");
+    } else if (arg === "-G" || arg === "--to-go") {
+      setTarget("go");
     } else if (arg.startsWith("-")) {
       throw new CliError(`unknown flag '${arg}'`);
     } else if (positional === undefined) {
@@ -105,7 +119,7 @@ function parseArguments(argv: string[]): Options {
       throw new CliError("expected at most one positional input");
     }
   }
-  return { output, positional, target, pretty, help };
+  return { output, positional, target, pretty, name, help };
 }
 
 function getShortHelp(): string {
@@ -116,7 +130,7 @@ Usage:
   cat file.json | rin [options]
 
 Example:
-  $ rin -T '.{S name,N age}'
+  $ rin -T '{String name; Number age}'
   type Root={name:string;};
 
 Options:
@@ -124,9 +138,11 @@ Options:
   --help-all      Show detailed usage and all options
   -L, --legend    Show schema notation legend and syntax guide
   -p, --pretty    Format output with multi-line pretty printing
-  -J, --to-json   Convert input to RIN AST JSON
+  -J, --to-json   Convert input to representative JSON data
   -R, --to-rin    Convert input to RIN schema notation (default)
   -T, --to-type   Convert input to TypeScript type definition
+  -G, --to-go     Convert input to Go struct definitions
+  -n, --name NAME Name the generated RIN, TypeScript, or Go type
   -o, --output    Save output to specified file
 `;
 }
@@ -140,21 +156,24 @@ Usage:
 
 Description:
   RIN (Reduced Interface Notation) is a compact schema format for structural data typing.
-  This CLI converts between RIN schemas, JSON data/AST, and TypeScript definitions.
+  This CLI converts between RIN schemas, JSON data, and TypeScript definitions.
   By default, outputs are token-minimized. Use -p/--pretty for multi-line formatting.
 
 Input Formats (auto-detected):
-  1. RIN Schema:      Starts with '.' (e.g. '.{S name,N age}')
+  1. RIN Schema:      Record notation (e.g. '{String name; Number age}')
   2. JSON Data:        Valid JSON object or array of objects
   3. TS Interface:     TypeScript definition (e.g. 'type User = { name: string; }')
 
 Target Output Flags (-t, --to <target>):
   -R, --to-rin       Output RIN schema notation (default)
-  -J, --to-json      Output RIN AST in JSON format
+  -J, --to-json      Output representative JSON data
   -T, --to-type      Output TypeScript type code
+  -G, --to-go        Output Go struct definitions
 
 Formatting Flags:
   -p, --pretty       Format output with multi-line pretty printing
+  -n, --name NAME    Name the generated RIN, TypeScript, or Go type
+  --name=NAME
 
 File Output Flags:
   -o, --output FILE  Save output to FILE instead of stdout
@@ -168,21 +187,21 @@ Help Flags:
 Examples:
   1. Convert JSON data to minimal RIN schema:
      $ echo '{"name":"Ada","age":30}' | rin
-     .{N age,S name}
+     {Number age;String name}
 
   2. Convert JSON data to pretty multi-line RIN schema:
      $ echo '{"name":"Ada","age":30}' | rin -p
-     .{
-       N age,
-       S name
+     {
+       Number age
+       String name
      }
 
   3. Convert RIN schema to minified TypeScript type:
-     $ rin -T '.{S name,N age}'
+     $ rin -T '{String name; Number age}'
      type Root={name:string;age:number;};
 
   4. Convert RIN schema to formatted multi-line TypeScript type:
-     $ rin -T -p '.{S name,N age}'
+     $ rin -T -p '{String name; Number age}'
      type Root = {
        name: string;
        age: number;
@@ -197,25 +216,23 @@ function getLegendHelp(): string {
   return `RIN Schema Notation Legend & Syntax Reference
 
 Base Types:
-  S       string      UTF-8 string value
-  N       number      Numeric value (excluding NaN)
-  B       boolean     Boolean true or false
-  L       null        Null literal value
-  X       unknown     Unknown / unconstrained value
-  O       object      Plain JavaScript object / record
+  String  string      UTF-8 string value
+  Number  number      Numeric value (excluding NaN)
+  Boolean boolean     Boolean true or false
+  Null    null        Null literal value
+  Any     any         Unconstrained value
 
 Type Modifiers:
-  A.T     Array of T  (e.g., A.S -> string[], A.A.N -> number[][])
-  T?      Nullable T  (e.g., S? -> string | null)
-  key?    Optional    Property may be omitted
-  S|N     Union       Type union matching any member type
+  T[]     Array of T  (e.g., String[] -> string[])
+  key?    Optional    Property may be omitted or null
+  String|Number       Type union matching any member type
 
 Grammar & Syntax Rules:
-  .{...}  Object Root Container
-  .[...]  Array of Object Records Root Container
-  S a b   Grouped Keys (type S applies to fields 'a' and 'b')
-  O(...)  Block Group (multiline scope for nested object properties)
-  $S, $N  Escaped Identifiers (property names matching base type tokens)
+  {...}   Object root container
+  [{...}] Array of object records root container
+  String a b       Grouped primitive fields
+  address{...}     Nested object field
+  items[]{...}     Nested array of object records
 `;
 }
 

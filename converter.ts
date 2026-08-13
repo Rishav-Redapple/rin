@@ -4,13 +4,18 @@ export type InputKind = "json" | "rin" | "interface";
 
 class ConverterError extends Error {}
 
-export function detectAndConvert(source: string): { schema: RootSchema; name?: string; kind: InputKind } {
+export function detectAndConvert(source: string): { schema: RootSchema; name?: string; kind: InputKind; value?: unknown } {
   const trimmed = source.trim();
-  if (trimmed.startsWith(".")) return { schema: parse(trimmed), kind: "rin" };
   try {
-    return { schema: inferRoot(JSON.parse(trimmed)), kind: "json" };
+    const value = JSON.parse(trimmed);
+    return { schema: inferRoot(value), kind: "json", value };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
+  }
+  const rinSource = trimmed.replace(/^(?:#[^\r\n]*(?:\r?\n|$)\s*)+/, "");
+  if (rinSource.startsWith("{") || rinSource.startsWith("[") || /^[A-Za-z_][A-Za-z0-9_]*\s*[\[{]/.test(rinSource)) {
+    const schema = parse(trimmed);
+    return { schema, name: schema.name, kind: "rin" };
   }
   const parsed = new InterfaceParser(trimmed).parse();
   return { schema: { kind: "root", container: "object", groups: parsed.groups }, name: parsed.name, kind: "interface" };

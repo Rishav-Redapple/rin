@@ -5,6 +5,9 @@ node_modules
 out
 dist
 *.tgz
+rin
+cmd/
+posts.*
 
 # code coverage
 coverage

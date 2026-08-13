@@ -1,36 +1,150 @@
-(* ── Root ───────────────────────────────────── *)
-Root         ::= ".{" GroupList "}"         (* object root *)
-               | ".[" GroupList "]"         (* array  root *)
+{
+  function type(name, arrays, nullable) {
+    return { kind: "type", name: name, arrays: arrays, nullable: nullable };
+  }
 
-(* ── Groups ─────────────────────────────────── *)
-(*  GroupSep allows both comma (inline) and      *)
-(*  newlines (block) as equivalent separators.   *)
-GroupList    ::= Group (GroupSep Group)*
-GroupSep     ::= "," | NL+
+  function key(name, optional, body) {
+    var result = { name: name, optional: optional };
+    if (body !== null) result.body = body;
+    return result;
+  }
 
-Group        ::= LeafGroup | BlockGroup
+  function group(typeExpression, keys) {
+    return { kind: "group", type: typeExpression, keys: keys };
+  }
 
-(*  Inline: type tag followed by space-separated keys.  *)
-(*  Terminated by GroupSep or closing delimiter.        *)
-LeafGroup    ::= TypeExpr Identifier+
+  function objectGroup(name, arrays, optional, body) {
+    return group(type("Object", arrays, false), [key(name, optional, body)]);
+  }
+}
 
-(*  Block: type tag opens a paren scope.                *)
-(*  Each line inside is one key with an optional shape. *)
-BlockGroup   ::= TypeExpr "(" NL+ KeyLine+ ")"
+// ================================================================
+// RIN v3 PEG grammar
+//
+// A root is a record enclosed by { }.
+// Groups are separated by a newline, comma, or semicolon.
+// A newline is significant between groups; spaces alone separate a
+// type from its keys and keys from one another.
+// ================================================================
 
-(* ── Keys ───────────────────────────────────── *)
-KeyLine      ::= Identifier "?"? RecordBody? NL+
+Start
+  = lead:Trivia root:Root trail:Trivia EOF { return root; }
 
-(*  Inline record: everything fits on one line.  *)
-(*  Block record:  nested shape spans lines.     *)
-RecordBody   ::= "{" GroupList "}"
-               | "{" NL+ GroupList NL+ "}"
+Root
+  = "{" body:RecordBodyContent? Trivia "}" {
+      return { kind: "root", type: "Object", groups: body !== null ? body : [] };
+    }
+  / name:Identifier Trivia "{" body:RecordBodyContent? Trivia "}" {
+      return { kind: "root", name: name, type: "Object", groups: body !== null ? body : [] };
+    }
+  / "[" Trivia "{" body:RecordBodyContent? Trivia "}" Trivia "]" {
+      return { kind: "root", type: "Array<Object>", groups: body !== null ? body : [] };
+    }
 
-(* ── Type Expression ─────────────────────────── *)
-TypeExpr     ::= AtomicType ("|" AtomicType)*
-AtomicType   ::= "A."* BaseType "?"?
-BaseType     ::= "S" | "N" | "B" | "L" | "X" | "O"
+RecordBody
+  = "{" body:RecordBodyContent? Trivia "}" { return body !== null ? body : []; }
 
-(* ── Lexical ─────────────────────────────────── *)
-Identifier   ::= [a-zA-Z_][a-zA-Z0-9_]*
-NL           ::= "\n" | "\r\n"
+RecordBodyContent
+  = lead:Trivia first:Group rest:(Separator Trivia group:Group { return group; })* {
+      return [first].concat(rest.map(function (item) { return item; }));
+    }
+
+// Explicit primitive group, e.g.:
+//   String name role address
+//   Number id ref_id?
+//   String[] ruleset
+TypedGroup
+  = expression:TypeExpression required:RequiredSpace keys:KeyList {
+      return group(expression, keys);
+    }
+
+// Object-key shorthand, e.g.:
+//   tags[]{String name; Number id}
+//   profile{String name}
+// Object-key names cannot be primitive names. This makes the first token
+// unambiguous: it is either a primitive type or a non-primitive object key.
+ObjectGroup
+  = name:NonPrimitiveIdentifier arrays:ArraySuffix* optional:OptionalMarker? body:RecordBody {
+      return objectGroup(name, arrays.length, optional !== null, body);
+    }
+
+Group
+  = typed:TypedGroup { return typed; }
+  / object:ObjectGroup { return object; }
+
+KeyList
+  = first:Key rest:(RequiredSpace key:Key { return key; })* {
+      return [first].concat(rest.map(function (item) { return item; }));
+    }
+
+Key
+  = name:Identifier optional:OptionalMarker? {
+      return key(name, optional !== null, null);
+    }
+
+TypeExpression
+  = first:AtomicType rest:(UnionOperator type:AtomicType { return type; })* {
+      var members = [first].concat(rest.map(function (item) { return item; }));
+      return members.length === 1 ? first : { kind: "union", members: members };
+    }
+
+AtomicType
+  = name:Primitive arrays:ArraySuffix* {
+      return type(name, arrays.length, false);
+    }
+
+Primitive
+  = "String" !IdentifierPart { return "String"; }
+  / "Number" !IdentifierPart { return "Number"; }
+  / "Boolean" !IdentifierPart { return "Boolean"; }
+  / "Null" !IdentifierPart { return "Null"; }
+  / "Any" !IdentifierPart { return "Any"; }
+
+NonPrimitiveIdentifier
+  = !Primitive Identifier
+
+ArraySuffix
+  = "[]"
+
+UnionOperator
+  = Trivia "|" Trivia
+
+OptionalMarker
+  = "?"
+
+Separator
+  = Trivia "," Trivia
+  / Trivia ";" Trivia
+  / LineBreak+
+
+RequiredSpace
+  = [ \t]+ Comment?
+
+Trivia
+  = (Horizontal / CommentLine / LineBreak)*
+
+Horizontal
+  = [ \t\r]+
+
+CommentLine
+  = [ \t]* Comment LineBreak
+
+Comment
+  = "#" [^\r\n]*
+
+LineBreak
+  = [ \t]* ("\r\n" / "\n")
+
+Identifier
+  = head:IdentifierStart tail:IdentifierPart* {
+      return head + tail.join("");
+    }
+
+IdentifierStart
+  = [a-zA-Z_]
+
+IdentifierPart
+  = [a-zA-Z0-9_]
+
+EOF
+  = !.
