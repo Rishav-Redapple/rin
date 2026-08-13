@@ -31,9 +31,9 @@ test("CLI supports RIN/type detection, pretty output, and root overrides", () =>
   expect(cli("{Number id?}", "-T").stdout).toBe("type Root={id?:number|null;};\n");
   expect(cli("{String name}", "-R", "-n", "Account").stdout).toBe("Account {String name}\n");
   expect(cli("Account {String name}", "-T").stdout).toBe("type Account={name:string;};\n");
-  expect(cli("{String name;Number id?}", "-G", "--name=User").stdout).toBe("package main\n\ntype User struct{Name string `json:\"name\"`;Id *float64 `json:\"id,omitempty\"`}\n");
-  expect(cli("{String name;Number id?}", "--to-go", "--name=User", "-p").stdout).toBe("package main\n\ntype User struct {\n  Name string `json:\"name\"`\n  Id *float64 `json:\"id,omitempty\"`\n}\n");
-  expect(cli("{Boolean active}", "--to=go").stdout).toBe("package main\n\ntype Root struct{Active bool `json:\"active\"`}\n");
+  expect(cli("{String name;Number id?}", "-G", "--name=User").stdout).toBe("type User struct{Name string `json:\"name\"`;Id *float64 `json:\"id,omitempty\"`}\n");
+  expect(cli("{String name;Number id?}", "--to-go", "--name=User", "-p").stdout).toBe("type User struct {\n  Name string `json:\"name\"`\n  Id *float64 `json:\"id,omitempty\"`\n}\n");
+  expect(cli("{Boolean active}", "--to=go").stdout).toBe("type Root struct{Active bool `json:\"active\"`}\n");
 });
 
 test("CLI accepts an output file and rejects invalid roots", async () => {

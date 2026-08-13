@@ -108,11 +108,10 @@ function exampleType(type: TypeExpression, record?: Group[]): unknown {
 }
 
 export function renderGo(schema: RootSchema, name: string, pretty: boolean): string {
-  const prefix = "package main\n\n";
-  if (schema.container === "object") return `${prefix}type ${name} ${renderGoRecord(schema.groups, 0, pretty)}\n`;
+  if (schema.container === "object") return `type ${name} ${renderGoRecord(schema.groups, 0, pretty)}\n`;
   const item = `${name}Item`;
-  if (!pretty) return `${prefix}type ${item} ${renderGoRecord(schema.groups, 0, false)};type ${name} []${item}\n`;
-  return `${prefix}type ${item} ${renderGoRecord(schema.groups, 0, true)}\n\ntype ${name} []${item}\n`;
+  if (!pretty) return `type ${item} ${renderGoRecord(schema.groups, 0, false)};type ${name} []${item}\n`;
+  return `type ${item} ${renderGoRecord(schema.groups, 0, true)}\n\ntype ${name} []${item}\n`;
 }
 
 function renderGoRecord(groups: Group[], level: number, pretty: boolean): string {
