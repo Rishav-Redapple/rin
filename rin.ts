@@ -57,7 +57,7 @@ export class RinSyntaxError extends Error {
   }
 }
 
-interface Token { value: string; position: number; }
+interface Token { value: string; position: number; quoted?: boolean; }
 
 const primitiveNames: Record<string, BaseType> = {
   String: "S", Number: "N", Boolean: "B", Null: "L", Any: "X",
@@ -102,16 +102,23 @@ class Parser {
   }
 
   private parseGroup(): Group {
-    const first = this.identifier();
-    const base = primitiveNames[first];
+    const firstToken = this.peek();
+    const first = this.keyName();
+    const base = firstToken?.quoted ? undefined : primitiveNames[first];
     if (!base) {
+      const objectNames = [first];
+      while (this.take("|")) {
+        const name = this.keyName();
+        if (!this.peek()?.quoted && primitiveNames[name]) this.fail("Object union keys must be quoted when they are primitive names");
+        objectNames.push(name);
+      }
       let arrayDepth = 0;
       while (this.take("[]")) arrayDepth += 1;
       const optional = this.take("?");
       this.expect("{");
       const record = this.parseGroups("}");
       this.expect("}");
-      return { type: { kind: "atomic", base: "O", arrayDepth, nullable: false }, keys: [{ name: first, optional, record }] };
+      return { type: { kind: "atomic", base: "O", arrayDepth, nullable: false }, keys: objectNames.map((name) => ({ name, optional, record })) };
     }
 
     const members = [this.parseAtomicTail(base)];
@@ -121,14 +128,20 @@ class Parser {
       if (!unionBase) this.fail("Expected a primitive name after '|'");
       members.push(this.parseAtomicTail(unionBase));
     }
+    const multiline = this.take("(");
+    if (multiline) this.skipSeparators();
     const keys: KeySelector[] = [];
     while (this.peek() && !isBoundary(this.peek()!.value)) {
-      const name = this.identifier();
+      const name = this.keyName();
       const optional = this.take("?");
       if (this.peek()?.value === "{") this.fail("Object fields must start with their key name, not a primitive type");
       keys.push({ name, optional });
+      if (multiline && this.skipSeparators()) continue;
     }
     if (keys.length === 0) this.fail("Expected one or more keys after primitive type");
+    if (multiline) {
+      this.expect(")");
+    }
     return { type: members.length === 1 ? members[0]! : { kind: "union", members }, keys };
   }
 
@@ -143,6 +156,12 @@ class Parser {
     if (!token || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(token.value)) this.fail("Expected identifier");
     this.index += 1;
     return token.value;
+  }
+
+  private keyName(): string {
+    const token = this.peek();
+    if (token?.quoted) { this.index += 1; return token.value; }
+    return this.identifier();
   }
 
   private take(value: string): boolean {
@@ -168,7 +187,7 @@ class Parser {
   }
 }
 
-function isBoundary(value: string): boolean { return value === "}" || value === "\n" || value === "," || value === ";"; }
+function isBoundary(value: string): boolean { return value === "}" || value === ")" || value === "\n" || value === "," || value === ";"; }
 
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
@@ -179,9 +198,27 @@ function tokenize(source: string): Token[] {
     if (rest[0] === "\n") { tokens.push({ value: "\n", position }); position += 1; continue; }
     if (/^[ \t\r]/.test(rest)) { position += 1; continue; }
     if (rest.startsWith("[]")) { tokens.push({ value: "[]", position }); position += 2; continue; }
+    if (rest[0] === '"') {
+      let end = 1;
+      let escaped = false;
+      for (; end < rest.length; end += 1) {
+        const character = rest[end]!;
+        if (!escaped && character === '"') break;
+        escaped = !escaped && character === "\\";
+        if (character !== "\\") escaped = false;
+      }
+      if (end >= rest.length) throw new RinSyntaxError("Unterminated quoted key", position);
+      const raw = rest.slice(0, end + 1);
+      let value: unknown;
+      try { value = JSON.parse(raw); } catch { throw new RinSyntaxError("Invalid quoted key", position); }
+      if (typeof value !== "string") throw new RinSyntaxError("Quoted key must be a string", position);
+      tokens.push({ value, position, quoted: true });
+      position += raw.length;
+      continue;
+    }
     const identifier = /^[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
     if (identifier) { tokens.push({ value: identifier[0], position }); position += identifier[0].length; continue; }
-    if ("{}[]?|,;".includes(rest[0]!)) { tokens.push({ value: rest[0]!, position }); position += 1; continue; }
+    if ("{}[]()?|,;".includes(rest[0]!)) { tokens.push({ value: rest[0]!, position }); position += 1; continue; }
     throw new RinSyntaxError(`Unexpected character '${rest[0]}'`, position);
   }
   return tokens;

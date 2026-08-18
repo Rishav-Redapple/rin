@@ -13,8 +13,10 @@
     return { kind: "group", type: typeExpression, keys: keys };
   }
 
-  function objectGroup(name, arrays, optional, body) {
-    return group(type("Object", arrays, false), [key(name, optional, body)]);
+  function objectGroup(names, arrays, optional, body) {
+    return group(type("Object", arrays, false), names.map(function (name) {
+      return key(name, optional, body);
+    }));
   }
 }
 
@@ -53,19 +55,30 @@ RecordBodyContent
 //   String name role address
 //   Number id ref_id?
 //   String[] ruleset
+//   String (name last_name maiden_name? surname hash
+//     here there where)
 TypedGroup
-  = expression:TypeExpression required:RequiredSpace keys:KeyList {
+  = expression:TypeExpression required:RequiredSpace keys:(
+      "(" Trivia keylist:BlockKeyList Trivia ")" { return keylist; }
+      / KeyList
+    ) {
       return group(expression, keys);
     }
 
 // Object-key shorthand, e.g.:
 //   tags[]{String name; Number id}
 //   profile{String name}
-// Object-key names cannot be primitive names. This makes the first token
-// unambiguous: it is either a primitive type or a non-primitive object key.
+//   a|b|c[]{String name; Number id}
+// Unquoted object-key names cannot be primitive names. Quoting makes keys
+// such as "String", "Null", or "1" unambiguous.
 ObjectGroup
-  = name:NonPrimitiveIdentifier arrays:ArraySuffix* optional:OptionalMarker? body:RecordBody {
-      return objectGroup(name, arrays.length, optional !== null, body);
+  = names:ObjectKeyUnion arrays:ArraySuffix* optional:OptionalMarker? body:RecordBody {
+      return objectGroup(names, arrays.length, optional !== null, body);
+    }
+
+ObjectKeyUnion
+  = first:(QuotedKey / NonPrimitiveIdentifier) rest:(UnionOperator name:(QuotedKey / NonPrimitiveIdentifier) { return name; })* {
+      return [first].concat(rest.map(function (item) { return item; }));
     }
 
 Group
@@ -77,10 +90,24 @@ KeyList
       return [first].concat(rest.map(function (item) { return item; }));
     }
 
+BlockKeyList
+  = first:Key rest:((RequiredSpace / LineBreak+) key:Key { return key; })* {
+      return [first].concat(rest.map(function (item) { return item; }));
+    }
+
 Key
-  = name:Identifier optional:OptionalMarker? {
+  = name:(QuotedKey / Identifier) optional:OptionalMarker? {
       return key(name, optional !== null, null);
     }
+
+QuotedKey
+  = '"' chars:QuotedKeyChar* '"' {
+      return chars.join("");
+    }
+
+QuotedKeyChar
+  = "\\\\" escaped:["\\\\\"/] { return escaped.join(""); }
+  / !"\\\\" !'"' character:. { return character; }
 
 TypeExpression
   = first:AtomicType rest:(UnionOperator type:AtomicType { return type; })* {

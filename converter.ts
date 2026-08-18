@@ -110,9 +110,9 @@ export function coalesceGroups(groups: Group[]): Group[] {
         ...(key.record ? { record: coalesceGroups(key.record) } : {}),
       };
 
-      const keySig = coalescedKey.record ? `${typeSig}:${coalescedKey.name}` : typeSig;
+      const keySig = coalescedKey.record ? `${typeSig}:${recordSig(coalescedKey.record)}` : typeSig;
       const existing = groupsByType.get(keySig);
-      if (existing && !coalescedKey.record) {
+      if (existing) {
         existing.keys.push(coalescedKey);
       } else {
         groupsByType.set(keySig, { type: group.type, keys: [coalescedKey] });
@@ -121,6 +121,13 @@ export function coalesceGroups(groups: Group[]): Group[] {
   }
 
   return [...groupsByType.values()];
+}
+
+function recordSig(groups: Group[]): string {
+  return coalesceGroups(groups)
+    .map((group) => `${renderTypeSig(group.type)}[${group.keys.map((key) => `${key.name}${key.optional ? "?" : ""}:${key.record ? recordSig(key.record) : ""}`).sort().join(",")}]`)
+    .sort()
+    .join(";");
 }
 
 function renderTypeSig(type: TypeExpression): string {

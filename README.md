@@ -17,6 +17,8 @@ RIN is a readable, compact schema notation with a TypeScript parser, runtime val
 - `?` belongs to a key and permits that field to be omitted or `null`.
 - A nested object is written as its field name followed by a record: `address{String city}`.
 - `|` creates a union, such as `String|Number id`.
+- Keys that could be confused with primitives or numbers are quoted, such as `String "1" "Null" "string"`.
+- In pretty output, primitive groups with more than five keys use a multiline block: `String (name last_name maiden_name? surname hash\n  here there where)`.
 - `#` starts a comment. Newlines, commas, and semicolons separate groups.
 - The first token of a group is always its primitive or object key. This makes `String String` unambiguous: it declares a string field named `String`.
 

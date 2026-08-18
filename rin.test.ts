@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parse, RinSyntaxError, validate } from "./rin.ts";
+import { renderRin } from "./renderer.ts";
+import { inferRoot } from "./converter.ts";
 
 const schema = `
   # Account schema
@@ -41,6 +43,37 @@ describe("parse (RIN v3)", () => {
   test("accepts unions and array record roots", () => {
     expect(parse("[{String|Number id}]").container).toBe("array");
     expect(parse("{String name Number id}").groups[0]?.keys.map((key) => key.name)).toEqual(["name", "Number", "id"]);
+  });
+
+  test("accepts quoted keys and multiline primitive blocks", () => {
+    const parsed = parse(`{String (\n  "1" Null string other\n)}`);
+    expect(parsed.groups[0]?.keys.map((key) => key.name)).toEqual(["1", "Null", "string", "other"]);
+  });
+
+  test("renders long primitive groups as multiline blocks only in pretty mode", () => {
+    const parsed = parse('{String "1" "Null" "string" a b c d e f}');
+    expect(renderRin(parsed, false)).toBe('{String "1" "Null" "string" a b c d e f}\n');
+    expect(renderRin(parsed, true)).toBe(`{
+  String (
+    "1" "Null" "string" a b
+    c d e f
+  )
+}\n`);
+  });
+
+  test("parses object key unions", () => {
+    const parsed = parse("{a|b|c[]{Number item_id quantity;String type}}");
+    expect(parsed.groups[0]?.keys.map((key) => key.name)).toEqual(["a", "b", "c"]);
+    expect(renderRin(parsed, false)).toBe("{a|b|c[]{Number item_id quantity;String type}}\n");
+  });
+
+  test("coalesces objects with the same structure into object key unions", () => {
+    const parsed = inferRoot({
+      a: [{ item_id: 1, quantity: 2, type: "x" }],
+      b: [{ item_id: 3, quantity: 4, type: "y" }],
+      c: [{ item_id: 5, quantity: 6, type: "z" }],
+    });
+    expect(renderRin(parsed, true)).toContain("a|b|c[]{");
   });
 });
 

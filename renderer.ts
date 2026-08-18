@@ -32,9 +32,25 @@ function renderRecord(groups: Group[], pretty: boolean, level: number): string {
 function renderGroup(group: Group, pretty: boolean, level: number): string[] {
   const keys = group.keys;
   if (isObjectGroup(group)) {
-    return keys.map((key) => `${key.name}${"[]".repeat(arrayDepth(group.type))}${key.optional ? "?" : ""}${renderRecord(coalesceGroups(key.record ?? []), pretty, level + 1)}`);
+    const optional = keys[0]?.optional ? "?" : "";
+    const record = keys[0]?.record ?? [];
+    return [`${keys.map((key) => renderKey(key.name)).join("|")}${"[]".repeat(arrayDepth(group.type))}${optional}${renderRecord(coalesceGroups(record), pretty, level + 1)}`];
   }
-  return [`${renderType(group.type)} ${keys.map((key) => `${key.name}${key.optional || isNullable(group.type) ? "?" : ""}`).join(" ")}`];
+  const renderedKeys = keys.map((key) => `${renderKey(key.name)}${key.optional || isNullable(group.type) ? "?" : ""}`);
+  if (pretty && renderedKeys.length > 5) {
+    const indent = "  ".repeat(level + 2);
+    const close = "  ".repeat(level + 1);
+    const rows: string[] = [];
+    for (let index = 0; index < renderedKeys.length; index += 5) rows.push(`${indent}${renderedKeys.slice(index, index + 5).join(" ")}`);
+    return [`${renderType(group.type)} (\n${rows.join("\n")}\n${close})`];
+  }
+  return [`${renderType(group.type)} ${renderedKeys.join(" ")}`];
+}
+
+function renderKey(name: string): string {
+  return /^[0-9]+(?:\.[0-9]+)?$/.test(name) || /^(?:string|number|boolean|null|any)$/i.test(name)
+    ? JSON.stringify(name)
+    : name;
 }
 
 function isObjectGroup(group: Group): boolean {
