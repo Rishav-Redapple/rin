@@ -1,6 +1,15 @@
-# RIN — Reduced Interface Notation
+# Rin — Reduced Interface Notation
 
-RIN is a readable, compact schema notation with a TypeScript parser, runtime validator, and CLI.
+Rin is a readable, compact schema notation with a TypeScript parser, runtime validator, and CLI.
+
+![RIN Token Efficiency Comparison](hero.png)
+
+Rin cuts schema size and token count by ~40% — same precision, less noise.
+
+> [!TIP]
+> Now supports JSON to Go structs. Use `-G` flag.
+
+## Syntax
 
 ```txt
 {
@@ -21,6 +30,23 @@ RIN is a readable, compact schema notation with a TypeScript parser, runtime val
 - In pretty output, primitive groups with more than five keys use a multiline block: `String (name last_name maiden_name? surname hash\n  here there where)`.
 - `#` starts a comment. Newlines, commas, and semicolons separate groups.
 - The first token of a group is always its primitive or object key. This makes `String String` unambiguous: it declares a string field named `String`.
+
+## Quick Start
+
+```ts
+import { validate } from "./rin.ts";
+
+const result = validate(
+  ".{ S name, N? age, A.O users?{ S email } }",
+  { name: "Ada", age: null, users: [{ email: "ada@example.test" }] }
+);
+
+if (result.ok) {
+  console.log("Valid payload:", result.value);
+} else {
+  console.error("Validation errors:", result.errors);
+}
+```
 
 ## CLI
 
